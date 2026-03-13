@@ -6,12 +6,27 @@ import os
 import socket
 from typing import List
 import urllib.parse
+import argparse
 
-app = FastAPI()
+def _resolve_shared_dir() -> str:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--shared-dir", dest="shared_dir", type=str, default=None)
+    args, _ = parser.parse_known_args()
 
-SHARED_DIR = "D:/aicontrol/shared"
+    if isinstance(args.shared_dir, str) and args.shared_dir.strip():
+        return args.shared_dir.strip().replace("\\", "/")
+
+    env_dir = os.getenv("AICONTROL_SHARED_DIR")
+    if isinstance(env_dir, str) and env_dir.strip():
+        return env_dir.strip().replace("\\", "/")
+
+    return "D:/aicontrol/shared" if os.name == "nt" else os.path.expanduser("~/aicontrol/shared").replace("\\", "/")
+
+SHARED_DIR = _resolve_shared_dir()
 if not os.path.exists(SHARED_DIR):
     os.makedirs(SHARED_DIR)
+
+app = FastAPI()
 
 # Mount the shared directory for downloading files
 app.mount("/files", StaticFiles(directory=SHARED_DIR), name="files")

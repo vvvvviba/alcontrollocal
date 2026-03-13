@@ -366,7 +366,7 @@
             </button>
 
             <div class="relative flex-1">
-                <input type="text" id="user-input" 
+                <input type="text" id="user-input" name="chat_message" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true" data-form-type="other"
                     class="w-full rounded-full py-3 px-6 pr-12 focus:outline-none focus:ring-2 focus:ring-blue-500 border input-styled"
                     placeholder="输入指令..." autofocus>
                 <button id="send-btn" class="absolute right-2 top-1/2 transform -translate-y-1/2 p-2 bg-blue-600 rounded-full hover:bg-blue-700 transition-colors">
@@ -418,7 +418,7 @@
                             </button>
                         </div>
                         <div class="text-xs text-slate-500">
-                            共享文件夹路径：<span class="font-mono bg-black/10 px-1 rounded">D:/aicontrol/shared</span>
+                            共享文件夹路径：<span id="share-folder-path" class="font-mono bg-black/10 px-1 rounded">D:/aicontrol/shared</span>
                         </div>
                     </div>
 
@@ -452,6 +452,9 @@
                     </button>
                     <button class="settings-tab-btn w-full text-left px-3 py-2 rounded text-sm font-medium transition-colors settings-tab-inactive" data-tab="profile">
                         个人界面
+                    </button>
+                    <button class="settings-tab-btn w-full text-left px-3 py-2 rounded text-sm font-medium transition-colors settings-tab-inactive" data-tab="share">
+                        共享文件
                     </button>
                 </div>
 
@@ -505,6 +508,21 @@
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                                 </svg>
                                 <p>更多个性化选项即将推出...</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Share Folder Settings -->
+                    <div id="tab-content-share" class="settings-tab-content hidden space-y-6">
+                        <h3 class="text-lg font-medium mb-4 pb-2 border-b border-gray-700">共享文件夹设置</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium mb-1 text-slate-400">共享文件夹路径</label>
+                                <div class="flex items-center gap-2">
+                                    <input type="text" id="config-share-dir" class="w-full rounded p-2 border input-styled focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="D:/aicontrol/shared">
+                                    <button id="browse-share-dir" class="px-3 py-2 rounded bg-slate-600/40 hover:bg-slate-600/60 text-slate-200 text-sm transition-colors whitespace-nowrap shrink-0">浏览...</button>
+                                </div>
+                                <div class="mt-2 text-xs text-slate-500">修改后可选择立即重启共享服务以应用新路径。</div>
                             </div>
                         </div>
                     </div>
@@ -823,6 +841,7 @@
         const shareInfoPanel = document.getElementById('share-info-panel');
         const shareUrlLink = document.getElementById('share-url-link');
         const copyUrlBtn = document.getElementById('copy-url-btn');
+        const shareFolderPath = document.getElementById('share-folder-path');
         
         let isSharing = false;
 
@@ -880,6 +899,17 @@
             shareModal.classList.remove('hidden');
             // Check status via backend command
             try {
+                try {
+                    const cfg = await axios.get('/api/config');
+                    if (shareFolderPath) {
+                        shareFolderPath.textContent = cfg.data.share_dir || "D:/aicontrol/shared";
+                    }
+                } catch (e) {
+                    if (shareFolderPath) {
+                        shareFolderPath.textContent = "D:/aicontrol/shared";
+                    }
+                }
+
                 const response = await axios.post('/api/chat', { 
                     message: "check share", 
                     mode: "regex" 
@@ -969,6 +999,9 @@
         const configBaseUrl = document.getElementById('config-base-url');
         const configModelSelect = document.getElementById('config-model');
         const configModelCustom = document.getElementById('config-model-custom');
+        const configShareDir = document.getElementById('config-share-dir');
+        const browseShareDirBtn = document.getElementById('browse-share-dir');
+        let originalShareDir = "";
 
         // Tab Logic
         const tabBtns = document.querySelectorAll('.settings-tab-btn');
@@ -1022,6 +1055,8 @@
                 const res = await axios.get('/api/config');
                 configApiKey.value = res.data.api_key;
                 configBaseUrl.value = res.data.base_url;
+                configShareDir.value = res.data.share_dir || "";
+                originalShareDir = (res.data.share_dir || "").trim();
                 
                 const currentModel = res.data.model;
                 // Check if model is in select options
@@ -1047,6 +1082,18 @@
             }
         });
 
+        browseShareDirBtn.addEventListener('click', async () => {
+            try {
+                const res = await axios.post('/api/select_folder', { initial_dir: configShareDir.value.trim() });
+                const selected = (res.data?.path || "").trim();
+                if (selected) {
+                    configShareDir.value = selected;
+                }
+            } catch (e) {
+                alert("打开目录选择器失败: " + (e.response?.data?.detail || e.message));
+            }
+        });
+
         // Close Modal
         function closeSettings() {
             settingsModal.classList.add('hidden');
@@ -1065,14 +1112,33 @@
             if (model === 'custom') {
                 model = configModelCustom.value.trim();
             }
+            const newShareDir = configShareDir.value.trim();
             
             try {
                 await axios.post('/api/config', {
                     api_key: configApiKey.value.trim(),
                     base_url: configBaseUrl.value.trim(),
-                    model: model
+                    model: model,
+                    share_dir: newShareDir
                 });
-                alert("设置已保存并生效！");
+                const changed = newShareDir !== (originalShareDir || "");
+                if (changed) {
+                    try {
+                        const status = await axios.post('/api/chat', { message: "check share", mode: "regex" });
+                        const result = status.data?.response || "";
+                        if (typeof result === "string" && result.startsWith("running|")) {
+                            const ok = confirm("共享文件夹路径已修改。共享服务正在运行，是否立即重启共享服务以应用新路径？");
+                            if (ok) {
+                                await axios.post('/api/chat', { message: "stop share", mode: "regex" });
+                                const started = await axios.post('/api/chat', { message: "start share", mode: "regex" });
+                                addMessage(started.data?.response || "共享服务已重启。", false);
+                            }
+                        }
+                    } catch (e) {
+                        // ignore restart prompt failures
+                    }
+                }
+                alert("设置已保存。");
                 closeSettings();
             } catch (e) {
                 alert("保存失败: " + e.message);

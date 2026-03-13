@@ -36,19 +36,83 @@ class ConfigRequest(BaseModel):
     api_key: str
     base_url: str
     model: str
+    share_dir: str | None = None
+
+class SelectFolderRequest(BaseModel):
+    initial_dir: str | None = None
 
 @app.get("/api/config")
 async def get_config():
     return {
         "api_key": agent.api_key or "",
         "base_url": agent.base_url or "",
-        "model": agent.model or ""
+        "model": agent.model or "",
+        "share_dir": getattr(agent, "share_dir", None) or ""
     }
 
 @app.post("/api/config")
 async def update_config(request: ConfigRequest):
-    agent.update_config(request.api_key, request.base_url, request.model)
+    agent.update_config(request.api_key, request.base_url, request.model, request.share_dir)
     return {"status": "success"}
+
+def _select_folder(initial_dir: str | None = None) -> str:
+    used_tk = False
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        used_tk = True
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+
+        chosen = filedialog.askdirectory(
+            title="选择共享文件夹",
+            initialdir=initial_dir or os.getcwd(),
+            mustexist=False,
+        )
+        try:
+            root.destroy()
+        except Exception:
+            pass
+
+        if isinstance(chosen, str) and chosen.strip():
+            return chosen.strip().replace("\\", "/")
+    except Exception:
+        pass
+    if used_tk:
+        return ""
+
+    if sys.platform == "win32":
+        ps = r"""
+Add-Type -AssemblyName System.Windows.Forms
+$dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+$dlg.Description = "选择共享文件夹"
+if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  $dlg.SelectedPath
+}
+"""
+        try:
+            completed = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            out = (completed.stdout or "").strip()
+            if out:
+                return out.replace("\\", "/")
+        except Exception:
+            pass
+
+    return ""
+
+@app.post("/api/select_folder")
+async def select_folder(request: SelectFolderRequest):
+    return {"path": _select_folder(request.initial_dir)}
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):

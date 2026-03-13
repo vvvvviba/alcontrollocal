@@ -1,12 +1,8 @@
 import re
 import os
-import json
 from tools import copy_files, list_directory, read_file, open_file, start_share, stop_share, check_share_status
 from openai import OpenAI
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
+from app_config import AppConfig, load_config, save_config
 
 class Agent:
     def __init__(self):
@@ -20,25 +16,15 @@ class Agent:
             "check_share_status": check_share_status
         }
         
-        self.config_path = os.path.join(os.path.dirname(__file__), "config.json")
         self.load_config()
 
     def load_config(self):
-        # Default from env
-        self.api_key = os.getenv("OPENAI_API_KEY")
-        self.base_url = os.getenv("OPENAI_BASE_URL")
-        self.model = os.getenv("LLM_MODEL", "gpt-3.5-turbo")
-        
-        # Override from config.json if exists
-        if os.path.exists(self.config_path):
-            try:
-                with open(self.config_path, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    self.api_key = config.get("api_key", self.api_key)
-                    self.base_url = config.get("base_url", self.base_url)
-                    self.model = config.get("model", self.model)
-            except Exception as e:
-                print(f"Error loading config.json: {e}")
+        cfg = load_config()
+        self.config = cfg
+        self.api_key = cfg.api_key
+        self.base_url = cfg.base_url
+        self.model = cfg.model
+        self.share_dir = cfg.share_dir
 
         self._init_client()
 
@@ -48,18 +34,21 @@ class Agent:
             self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
             print(f"Agent Client Re-initialized: URL={self.base_url}, Model={self.model}")
 
-    def update_config(self, api_key, base_url, model):
+    def update_config(self, api_key, base_url, model, share_dir=None):
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
-        
-        # Save to config.json
-        with open(self.config_path, 'w', encoding='utf-8') as f:
-            json.dump({
-                "api_key": api_key,
-                "base_url": base_url,
-                "model": model
-            }, f, indent=2)
+        if isinstance(share_dir, str):
+            self.share_dir = share_dir.strip()
+
+        cfg = AppConfig(
+            api_key=self.api_key or "",
+            base_url=self.base_url or "",
+            model=self.model or "gpt-3.5-turbo",
+            share_dir=(self.share_dir or "").replace("\\", "/"),
+        )
+        save_config(cfg)
+        self.config = cfg
             
         self._init_client()
         return True

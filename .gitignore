@@ -1,0 +1,8 @@
+backend/.env
+backend/config.json
+backend/share.pid
+**/__pycache__/
+*.pyc
+.venv/
+.idea/
+.vscode/

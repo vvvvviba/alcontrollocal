@@ -8,22 +8,97 @@ import subprocess
 import sys
 import socket
 import signal
+from app_config import load_config
 
 # Global variable to store the share server process
 SHARE_PROCESS = None
 SHARE_PID_FILE = os.path.join(os.path.dirname(__file__), "share.pid")
 
-def get_lan_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+def _is_pid_running(pid: int) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+
+    if sys.platform == "win32":
+        try:
+            completed = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            output = (completed.stdout or "") + (completed.stderr or "")
+            if (
+                "No tasks are running" in output
+                or "没有运行的任务" in output
+                or "信息:" in output
+            ):
+                return False
+            return f"\"{pid}\"" in output
+        except Exception:
+            return False
+
     try:
-        # doesn't even have to be reachable
-        s.connect(('10.255.255.255', 1))
-        IP = s.getsockname()[0]
-    except Exception:
-        IP = '127.0.0.1'
-    finally:
-        s.close()
-    return IP
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+def get_lan_ip():
+    def _udp_guess() -> str:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("10.255.255.255", 1))
+            return s.getsockname()[0]
+        except Exception:
+            return "127.0.0.1"
+        finally:
+            s.close()
+
+    def _all_ipv4() -> list[str]:
+        candidates: list[str] = []
+        try:
+            hostname = socket.gethostname()
+            _, _, ips = socket.gethostbyname_ex(hostname)
+            candidates.extend(ips)
+        except Exception:
+            pass
+
+        guess = _udp_guess()
+        candidates.append(guess)
+
+        cleaned: list[str] = []
+        for ip in candidates:
+            if not isinstance(ip, str):
+                continue
+            ip = ip.strip()
+            if not ip or ip == "127.0.0.1" or ip.startswith("169.254."):
+                continue
+            if ip not in cleaned:
+                cleaned.append(ip)
+        return cleaned
+
+    def _score(ip: str) -> int:
+        if ip.startswith("192.168."):
+            return 300
+        if ip.startswith("10."):
+            return 200
+        if ip.startswith("172."):
+            try:
+                second = int(ip.split(".")[1])
+                if 16 <= second <= 31:
+                    return 150
+            except Exception:
+                pass
+        return 50
+
+    ips = _all_ipv4()
+    if not ips:
+        return "127.0.0.1"
+    ips.sort(key=_score, reverse=True)
+    return ips[0]
+
+def get_share_dir() -> str:
+    return load_config().share_dir
 
 def check_share_status():
     """Checks if the file sharing server is running."""
@@ -31,11 +106,15 @@ def check_share_status():
         try:
             with open(SHARE_PID_FILE, 'r') as f:
                 pid = int(f.read().strip())
-            # Check if process exists
-            os.kill(pid, 0)
-            ip = get_lan_ip()
-            return f"running|http://{ip}:8081"
-        except (OSError, ValueError):
+            if _is_pid_running(pid):
+                ip = get_lan_ip()
+                return f"running|http://{ip}:8081"
+            try:
+                os.remove(SHARE_PID_FILE)
+            except OSError:
+                pass
+            return "stopped"
+        except (ValueError, OSError, Exception):
             # Process doesn't exist or invalid PID
             return "stopped"
     return "stopped"
@@ -49,10 +128,13 @@ def start_share():
         try:
             with open(SHARE_PID_FILE, 'r') as f:
                 pid = int(f.read().strip())
-            # Check if process exists
-            os.kill(pid, 0)
-            return f"共享服务已在运行中: http://{get_lan_ip()}:8081"
-        except (OSError, ValueError):
+            if _is_pid_running(pid):
+                return f"共享服务已在运行中: http://{get_lan_ip()}:8081"
+            try:
+                os.remove(SHARE_PID_FILE)
+            except OSError:
+                pass
+        except (ValueError, OSError, Exception):
             # Process doesn't exist or invalid PID, clean up
             try:
                 os.remove(SHARE_PID_FILE)
@@ -60,6 +142,8 @@ def start_share():
                 pass
 
     try:
+        share_dir = get_share_dir()
+
         # Path to share_server.py
         server_script = os.path.join(os.path.dirname(__file__), "share_server.py")
         
@@ -67,18 +151,21 @@ def start_share():
         # Use Popen to run in background
         if sys.platform == 'win32':
              # CREATE_NEW_CONSOLE = 0x00000010
-             SHARE_PROCESS = subprocess.Popen([sys.executable, server_script], 
-                                            creationflags=subprocess.CREATE_NEW_CONSOLE)
+             SHARE_PROCESS = subprocess.Popen(
+                 [sys.executable, server_script, "--shared-dir", share_dir],
+                 creationflags=subprocess.CREATE_NEW_CONSOLE,
+             )
         else:
-             SHARE_PROCESS = subprocess.Popen([sys.executable, server_script])
+             SHARE_PROCESS = subprocess.Popen([sys.executable, server_script, "--shared-dir", share_dir])
              
         # Save PID
         with open(SHARE_PID_FILE, 'w') as f:
             f.write(str(SHARE_PROCESS.pid))
             
         ip = get_lan_ip()
-        url = f"http://{ip}:8081"
-        return f"✅ 局域网文件共享已开启！\n\n**局域网访问地址:** [{url}]({url})\n**本地共享文件夹:** `D:/aicontrol/shared`\n\n1. 您现在可以将文件复制到该共享文件夹中。\n2. 在同一 Wi-Fi 下的其他设备（如手机、平板）上打开上述链接，即可上传或下载文件。"
+        lan_url = f"http://{ip}:8081"
+        local_url = "http://127.0.0.1:8081"
+        return f"✅ 局域网文件共享已开启！\n\n**本机访问(当前电脑):** [{local_url}]({local_url})\n**局域网访问(其他设备):** [{lan_url}]({lan_url})\n**本地共享文件夹:** `{share_dir}`\n\n1. 您现在可以将文件复制到该共享文件夹中。\n2. 其他设备需与本机处于同一网络/同一 Wi-Fi 才能访问局域网地址。\n3. 如提示拒绝连接，请检查防火墙是否允许端口 8081。"
     except Exception as e:
         return f"启动共享服务失败: {str(e)}"
 
