@@ -1,8 +1,6 @@
 fastapi
 uvicorn
-pandas
 python-docx
-openpyxl
 pydantic
 python-multipart
 openai

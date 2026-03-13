@@ -1,9 +1,7 @@
 import os
 import shutil
 import glob
-import pandas as pd
 from docx import Document
-from docx.shared import Inches
 import subprocess
 import sys
 import socket
